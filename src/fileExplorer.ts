@@ -192,9 +192,9 @@ export class FileSystemProvider implements vscode.TreeDataProvider<Entry>, vscod
 			(async () => {
 				console.log(`changed "${filepath}"`);
 				this._onDidChangeTreeData.fire(undefined);
-				// vscode.commands.executeCommand("fileOrder.publish", ).then(undefined, err => {
-				// 	console.log("error from fileorder.merge");
-				// });
+				vscode.commands.executeCommand("fileOrder.update", { uri: filepath }).then(undefined, err => {
+					console.log("error from fileorder.update");
+				});
 			})();
 		});
 
@@ -323,10 +323,11 @@ export class FileExplorer {
 	constructor(context: vscode.ExtensionContext) {
 		const treeDataProvider = new FileSystemProvider();
 		context.subscriptions.push(vscode.window.createTreeView('fileExplorer', { treeDataProvider }));
+
 		const workspaceFolder = vscode.workspace.workspaceFolders?.filter(folder => folder.uri.scheme === 'file')[0];
 		if (workspaceFolder) {
 			console.log(`watch "${workspaceFolder.uri}"`);
-			treeDataProvider.watch(workspaceFolder.uri, { recursive: true, excludes: []});
+			context.subscriptions.push(treeDataProvider.watch(workspaceFolder.uri, { recursive: true, excludes: []}));
 		}
 	}
 
