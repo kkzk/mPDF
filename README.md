@@ -13,6 +13,6 @@ Combine selected documents into PDF.
 
 ## Release Notes
 
-### 0.0.0
+### 0.0.1
 
-Not released.
+Initial released.
