@@ -183,7 +183,11 @@ export class FileOrderProvidor implements vscode.TreeDataProvider<Node>, vscode.
     loadSetting(){
 		const workspaceFolder = vscode.workspace.workspaceFolders?.filter(folder => folder.uri.scheme === 'file')[0];
         if (workspaceFolder) {
-            this.documents = JSON.parse((fs.readFileSync(path.join(workspaceFolder.uri.fsPath, "./.mPDF.json")).toString()));
+            try {
+                this.documents = JSON.parse((fs.readFileSync(path.join(workspaceFolder.uri.fsPath, "./.mPDF.json")).toString()));                
+            } catch (error) {
+                // pass                
+            }
         }
     }
 
