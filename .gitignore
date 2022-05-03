@@ -5,3 +5,4 @@ node_modules
 *.vsix
 testdata/*.json
 **/*.pdf
+src/testdata/.mPDF.json
