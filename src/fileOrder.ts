@@ -45,6 +45,7 @@ export class FileOrderProvidor implements vscode.TreeDataProvider<Node>, vscode.
         this.loadSetting();
 
         context.subscriptions.push(vscode.commands.registerCommand("fileOrder.add", (name) => this.add(name)));
+        context.subscriptions.push(vscode.commands.registerCommand("fileOrder.update", (entry) => this.update(entry)));
         context.subscriptions.push(vscode.commands.registerCommand("fileOrder.delete", (name) => this.delete(name)));
         context.subscriptions.push(vscode.commands.registerCommand("fileOrder.select", (element) => this.select(element)));
         context.subscriptions.push(vscode.commands.registerCommand("fileOrder.merge", () => this.merge()));
@@ -120,11 +121,11 @@ export class FileOrderProvidor implements vscode.TreeDataProvider<Node>, vscode.
         }
     }
 
-    add(item: Entry): void {
-        var node = new Document(vscode.workspace.asRelativePath(item.uri, false));
-        if (item.uri.fsPath.endsWith("xlsx")) {
+    add(entry: Entry): void {
+        var node = new Document(vscode.workspace.asRelativePath(entry.uri, false));
+        if (entry.uri.fsPath.endsWith("xlsx")) {
             var wb = new exceljs.Workbook();
-            wb.xlsx.readFile(item.uri.fsPath).then(wb => {
+            wb.xlsx.readFile(entry.uri.fsPath).then(wb => {
                 node.worksheets = wb.worksheets.map((sheet) => new WorkSheet(sheet.name, sheet.state));
                 this.documents.push(node);
                 this.saveSetting();
@@ -137,6 +138,14 @@ export class FileOrderProvidor implements vscode.TreeDataProvider<Node>, vscode.
             this._onDidChangeTreeData.fire(undefined);
         }
         vscode.commands.executeCommand("fileOrder.publish", node);
+    }
+
+    update(entry: Entry): void {
+        const relativePath = vscode.workspace.asRelativePath(entry.uri, false);
+        const documents = this.documents.filter(d => d.name === relativePath);
+        if (documents.length === 1) {
+            vscode.commands.executeCommand("fileOrder.publish", documents[0]);
+        }
     }
 
     delete(item: Node) {
@@ -183,7 +192,11 @@ export class FileOrderProvidor implements vscode.TreeDataProvider<Node>, vscode.
     loadSetting(){
 		const workspaceFolder = vscode.workspace.workspaceFolders?.filter(folder => folder.uri.scheme === 'file')[0];
         if (workspaceFolder) {
-            this.documents = JSON.parse((fs.readFileSync(path.join(workspaceFolder.uri.fsPath, "./.mPDF.json")).toString()));
+            try {
+                this.documents = JSON.parse((fs.readFileSync(path.join(workspaceFolder.uri.fsPath, "./.mPDF.json")).toString()));                
+            } catch (error) {
+                // pass                
+            }
         }
     }
 

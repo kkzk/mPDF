@@ -3,7 +3,7 @@
 	"displayName": "mPDF",
 	"description": "Merge selected documents into PDF",
 	"publisher": "kkzk",
-	"version": "0.0.0",
+	"version": "0.0.1",
 	"repository": {
 		"url": "https://github.com/kkzk/mPDF"
 	},
@@ -101,7 +101,9 @@
 		"watch": "tsc -watch -p ./",
 		"pretest": "npm run compile && npm run lint",
 		"lint": "eslint src --ext ts",
-		"test": "node ./out/test/runTest.js"
+		"test": "node ./out/test/runTest.js",
+		"package": "vsce package --target win32-x64",
+		"publish": "vsce publish --target win32-x64"
 	},
 	"devDependencies": {
 		"@types/glob": "^7.2.0",
