@@ -23,6 +23,7 @@ function Save-Word {
     
     process {
         [System.__ComObject]$wordApplication = New-Object -ComObject Word.Application
+        New-Item ($pdfPath | Split-path -Parent) -itemType Directory -Force > $null
         $wordDocument = $wordApplication.Documents.Open($wordPath.ToString(), 0, $true, $true)
         $wordDocument.ExportAsFixedFormat($pdfPath, $wdExportFormatPDF)
         $wordDocument.Close()
