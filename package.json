@@ -1,9 +1,13 @@
 {
 	"name": "mpdf",
 	"displayName": "mPDF",
-	"description": "",
+	"description": "Merge selected documents into PDF",
 	"publisher": "kkzk",
-	"version": "0.0.1",
+	"version": "0.0.0",
+	"repository": {
+		"url": "https://github.com/kkzk/mPDF"
+	},
+	"preview": true,
 	"engines": {
 		"vscode": "^1.66.0"
 	},
@@ -11,7 +15,6 @@
 		"Other"
 	],
 	"activationEvents": [
-		"onCommand:mpdf.helloWorld",
 		"onView:fileExplorer"
 	],
 	"main": "./out/extension.js",
@@ -46,7 +49,7 @@
 			"activitybar": [
 				{
 					"id": "mPDF",
-					"title": "Multisource PDF",
+					"title": "Merge to PDF",
 					"icon": "media/mPDF.svg"
 				}
 			]
