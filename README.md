@@ -6,6 +6,9 @@ Create PDF from some MS-Office(.docx, .xlsx) documents.
 
 Combine selected documents into PDF.
 
+**Displaying PDF is a feature of another extension.**
+
+![usage](images/usage.gif)
 ## Requirements
 
 - Windows OS and MS-Office local installasion.
@@ -13,6 +16,6 @@ Combine selected documents into PDF.
 
 ## Release Notes
 
-### 0.0.1
+### 0.0.2
 
-Initial released.
+Add icon and images.

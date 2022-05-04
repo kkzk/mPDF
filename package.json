@@ -3,11 +3,12 @@
 	"displayName": "mPDF",
 	"description": "Merge selected documents into PDF",
 	"publisher": "kkzk",
-	"version": "0.0.1",
+	"version": "0.0.2",
 	"repository": {
 		"url": "https://github.com/kkzk/mPDF"
 	},
 	"preview": true,
+	"icon": "media/mPDF-large.png",
 	"engines": {
 		"vscode": "^1.66.0"
 	},
