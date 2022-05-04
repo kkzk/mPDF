@@ -8,6 +8,7 @@
 		"url": "https://github.com/kkzk/mPDF"
 	},
 	"preview": true,
+	"icon": "images/mPDF-large.png",
 	"engines": {
 		"vscode": "^1.66.0"
 	},
