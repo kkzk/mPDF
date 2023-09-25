@@ -130,14 +130,15 @@ export class FileOrderProvidor implements vscode.TreeDataProvider<Node>, vscode.
                 this.documents.push(node);
                 this.saveSetting();
                 this._onDidChangeTreeData.fire(undefined);
+                vscode.commands.executeCommand("fileOrder.publish", node);
             });
         }
         else {
             this.documents.push(node);
             this.saveSetting();
             this._onDidChangeTreeData.fire(undefined);
+            vscode.commands.executeCommand("fileOrder.publish", node);
         }
-        vscode.commands.executeCommand("fileOrder.publish", node);
     }
 
     update(entry: Entry): void {
