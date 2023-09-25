@@ -16,6 +16,14 @@ Combine selected documents into PDF.
 
 ## Release Notes
 
+### 0.0.4
+
+ファイル名に中黒（・）が使用できなかった事象に対応。
+
+### 0.0.3
+
+Excel から PDF を作成するタイミングの修正
+
 ### 0.0.2
 
 Add icon and images.
