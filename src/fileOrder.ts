@@ -59,8 +59,11 @@ export class FileOrderProvidor implements vscode.TreeDataProvider<Node>, vscode.
                 const workspaceDir = path.dirname(vscode.workspace.workspaceFolders[0].uri.fsPath);
                 const parentName = path.basename(workspaceDir);
                 const pdfFilename = path.join(workspaceDir, parentName);
+                const documentUri = encodeURI(item.name);
                 this.terminal.show(true);
-                this.terminal.sendText(`. "${scriptPath}"; Save-pdf .mpdf.json "${item.name}" `);
+                var command = `. "${scriptPath}"; Save-pdf .mpdf.json "${documentUri}" `;
+                this.terminal.sendText(command);
+
             }
         }));
     }

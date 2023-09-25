@@ -1,4 +1,5 @@
 ﻿using namespace System.Collections.Generic
+Add-Type -AssemblyName System.Web
 
 $xlTypePDF = 0
 $xlQualityStandard = 0
@@ -91,10 +92,11 @@ function Save-Pdf {
     [CmdletBinding()]
     param (
         [string]$jsonFilename=".mpdf.json",
-        [string]$document        
+        [string]$documentUri
     )
     
     begin {
+        $document = [System.Web.HttpUtility]::UrlDecode($documentUri)
         $ext = [System.IO.Path]::GetExtension($document)
     }
     
