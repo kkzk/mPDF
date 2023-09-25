@@ -3,7 +3,7 @@
 	"displayName": "mPDF",
 	"description": "Merge selected documents into PDF",
 	"publisher": "kkzk",
-	"version": "0.0.2",
+	"version": "0.0.3",
 	"repository": {
 		"url": "https://github.com/kkzk/mPDF"
 	},
