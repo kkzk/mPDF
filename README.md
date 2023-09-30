@@ -16,6 +16,10 @@ Combine selected documents into PDF.
 
 ## Release Notes
 
+### 0.1.0
+
+powershell ではなく winax を使用する。
+
 ### 0.0.4
 
 ファイル名に中黒（・）が使用できなかった事象に対応。
