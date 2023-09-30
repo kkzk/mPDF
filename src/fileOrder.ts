@@ -8,14 +8,16 @@ import PDFMerger = require('pdf-merger-js');
 
 import { Entry } from "./fileExplorer";
 
+import * as sap from './saveAsPdf';
+
 type NodeType = "worksheet" | "workbook" | "misc";
 
-interface Node {
+export interface Node {
     name: string;
     worksheets?: WorkSheet[];
 }
 
-class WorkSheet implements Node {
+export class WorkSheet implements Node {
     name: string;
     visible: boolean = true;
     printable: boolean = true;
@@ -27,7 +29,7 @@ class WorkSheet implements Node {
     }
 }
 
-class Document implements Node {
+export class Document implements Node {
     name: string;
     worksheets?: WorkSheet[];
 
@@ -56,14 +58,12 @@ export class FileOrderProvidor implements vscode.TreeDataProvider<Node>, vscode.
             }
             const scriptPath = path.join(context.extensionPath, "script", "saveAsPdf.ps1");
             if (vscode.workspace.workspaceFolders !== undefined){
-                const workspaceDir = path.dirname(vscode.workspace.workspaceFolders[0].uri.fsPath);
-                const parentName = path.basename(workspaceDir);
-                const pdfFilename = path.join(workspaceDir, parentName);
+                const workspaceDir = vscode.workspace.workspaceFolders[0].uri.fsPath;
                 const documentUri = encodeURI(item.name);
-                this.terminal.show(true);
-                var command = `. "${scriptPath}"; Save-pdf .mpdf.json "${documentUri}" `;
-                this.terminal.sendText(command);
-
+                // this.terminal.show(true);
+                // var command = `. "${scriptPath}"; Save-pdf .mpdf.json "${documentUri}" `;
+                // this.terminal.sendText(command);
+                sap.savePdf(this.documents, workspaceDir, documentUri);
             }
         }));
     }
@@ -212,7 +212,7 @@ export class FileOrderProvidor implements vscode.TreeDataProvider<Node>, vscode.
                 return replaceExt(path.join(workspaceFolder.uri.fsPath, ".mPDF", wb.name), ".pdf");
             });
             const mergedPath = path.join(workspaceFolder.uri.fsPath, workspaceFolder.name + ".pdf");
-            console.log(sources);
+            console.log("merge sources:", sources);
             (async (sources: string[], mergedPath: string) => {
                 sources.forEach(element => {
                     merger.add(element);

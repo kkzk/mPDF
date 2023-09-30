@@ -127,6 +127,7 @@
 		"mkdirp": "^0.5.1",
 		"pdf-merger-js": "^3.4.0",
 		"replace-ext": "^2.0.0",
-		"rimraf": "^2.6.2"
+		"rimraf": "^2.6.2",
+		"winax": "^3.4.1"
 	}
 }
