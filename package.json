@@ -3,7 +3,7 @@
 	"displayName": "mPDF",
 	"description": "Merge selected documents into PDF",
 	"publisher": "kkzk",
-	"version": "0.0.4",
+	"version": "0.1.0",
 	"repository": {
 		"url": "https://github.com/kkzk/mPDF"
 	},
@@ -127,6 +127,7 @@
 		"mkdirp": "^0.5.1",
 		"pdf-merger-js": "^3.4.0",
 		"replace-ext": "^2.0.0",
-		"rimraf": "^2.6.2"
+		"rimraf": "^2.6.2",
+		"winax": "^3.4.1"
 	}
 }
