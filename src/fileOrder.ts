@@ -45,27 +45,12 @@ export class FileOrderProvidor implements vscode.TreeDataProvider<Node>, vscode.
 
     constructor(context: vscode.ExtensionContext) {
         this.loadSetting();
-
         context.subscriptions.push(vscode.commands.registerCommand("fileOrder.add", (name) => this.add(name)));
         context.subscriptions.push(vscode.commands.registerCommand("fileOrder.update", (entry) => this.update(entry)));
         context.subscriptions.push(vscode.commands.registerCommand("fileOrder.delete", (name) => this.delete(name)));
         context.subscriptions.push(vscode.commands.registerCommand("fileOrder.select", (element) => this.select(element)));
         context.subscriptions.push(vscode.commands.registerCommand("fileOrder.merge", () => this.merge()));
-
-        context.subscriptions.push(vscode.commands.registerCommand('fileOrder.publish', (item: Node) => {
-            if (!this.terminal) {
-                this.terminal = vscode.window.createTerminal(`mPDF`, "powershell.exe");
-            }
-            const scriptPath = path.join(context.extensionPath, "script", "saveAsPdf.ps1");
-            if (vscode.workspace.workspaceFolders !== undefined){
-                const workspaceDir = vscode.workspace.workspaceFolders[0].uri.fsPath;
-                const documentUri = encodeURI(item.name);
-                // this.terminal.show(true);
-                // var command = `. "${scriptPath}"; Save-pdf .mpdf.json "${documentUri}" `;
-                // this.terminal.sendText(command);
-                sap.savePdf(this.documents, workspaceDir, documentUri);
-            }
-        }));
+        context.subscriptions.push(vscode.commands.registerCommand('fileOrder.publish', (item: Node) => this.publish(item)));
     }
 
 	dropMimeTypes = ['application/vnd.code.tree.fileOrderProvidor'];
@@ -124,6 +109,14 @@ export class FileOrderProvidor implements vscode.TreeDataProvider<Node>, vscode.
         }
     }
 
+    publish(item: Node) {
+        if (vscode.workspace.workspaceFolders !== undefined){
+            const workspaceDir = vscode.workspace.workspaceFolders[0].uri.fsPath;
+            const documentUri = encodeURI(item.name);
+            sap.savePdf(this.documents, workspaceDir, documentUri);
+        }
+    }
+    
     add(entry: Entry): void {
         var node = new Document(vscode.workspace.asRelativePath(entry.uri, false));
         if (entry.uri.fsPath.endsWith("xlsx")) {
