@@ -61,8 +61,7 @@ export function saveExcel(data: fo.Document[], workspaceDir: string, xlsRelpath:
     excel.Quit();
 }
 
-export function savePdf(jsonData: fo.Document[], workspaceDir: string, documentUri: string) {
-    const document = decodeURI(documentUri);
+export function savePdf(jsonData: fo.Document[], workspaceDir: string, document: string) {
     const ext = path.extname(document);
     console.log(`extension: ${ext}`);
     switch(ext) {

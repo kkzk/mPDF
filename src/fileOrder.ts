@@ -112,8 +112,7 @@ export class FileOrderProvidor implements vscode.TreeDataProvider<Node>, vscode.
     publish(item: Node) {
         if (vscode.workspace.workspaceFolders !== undefined){
             const workspaceDir = vscode.workspace.workspaceFolders[0].uri.fsPath;
-            const documentUri = encodeURI(item.name);
-            sap.savePdf(this.documents, workspaceDir, documentUri);
+            sap.savePdf(this.documents, workspaceDir, item.name);
         }
     }
     
