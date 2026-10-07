@@ -1,7 +1,7 @@
 import * as assert from 'assert';
 import * as path from 'path';
 
-import { Document, WorkSheet, moveDocument, parseSetting } from '../fileOrder';
+import { Document, WorkSheet, moveDocument, parseSetting, setSheetVisible } from '../fileOrder';
 import { intermediatePdfPath } from '../paths';
 
 suite('paths', () => {
@@ -28,9 +28,43 @@ suite('setting', () => {
 
 	test('parseSetting round-trips JSON.stringify output', () => {
 		const doc = new Document('a.xlsx');
+		doc.enabled = false;
 		doc.worksheets = [new WorkSheet('S1', 'visible'), new WorkSheet('S2', 'hidden')];
 		const [restored] = parseSetting(JSON.stringify([doc]));
 		assert.deepStrictEqual(restored, doc);
+	});
+
+	test('documents saved by 0.1.x (no "enabled") are included', () => {
+		const [doc] = parseSetting(JSON.stringify([{ name: 'a.docx', worksheets: [] }]));
+		assert.strictEqual(doc.enabled, true);
+	});
+});
+
+suite('setSheetVisible', () => {
+	function workbook(...states: string[]): Document {
+		const doc = new Document('a.xlsx');
+		doc.worksheets = states.map((state, i) => new WorkSheet(`S${i + 1}`, state));
+		return doc;
+	}
+
+	test('hides a sheet while another stays visible', () => {
+		const doc = workbook('visible', 'visible');
+		assert.strictEqual(setSheetVisible(doc, doc.worksheets[0], false), true);
+		assert.strictEqual(doc.worksheets[0].visible, false);
+	});
+
+	test('refuses to hide the last visible sheet', () => {
+		const doc = workbook('visible', 'visible');
+		setSheetVisible(doc, doc.worksheets[0], false);
+		assert.strictEqual(setSheetVisible(doc, doc.worksheets[1], false), false);
+		assert.strictEqual(doc.worksheets[1].visible, true);
+	});
+
+	test('hidden sheets in Excel do not count as visible', () => {
+		const doc = workbook('visible', 'hidden');
+		assert.strictEqual(setSheetVisible(doc, doc.worksheets[0], false), false);
+		assert.strictEqual(setSheetVisible(doc, doc.worksheets[1], true), false);
+		assert.strictEqual(doc.worksheets[1].visible, false);
 	});
 });
 

@@ -1,18 +1,30 @@
 import * as vscode from 'vscode';
 import * as crypto from 'crypto';
 
+/** What the webview displays: a PDF, or a message instead of pages. */
+type Message = { type: 'load'; data: Uint8Array } | { type: 'message'; text: string };
+
 /** A webview panel that shows the merged PDF with the bundled pdf.js (no other extension needed). */
 export class PdfPreview implements vscode.Disposable {
 	private panel?: vscode.WebviewPanel;
 	private ready = false;
-	private pending?: Uint8Array;
-	private last?: { title: string; data: Uint8Array };
+	private pending?: Message;
+	private last?: { title: string; message: Message };
 
 	constructor(private readonly extensionUri: vscode.Uri) { }
 
 	/** Shows `data` in the preview, opening the panel beside the editor if needed. */
 	show(title: string, data: Uint8Array): void {
-		this.last = { title, data };
+		this.display(title, { type: 'load', data });
+	}
+
+	/** Replaces the pages with a message, e.g. when there is nothing to merge. */
+	showMessage(title: string, text: string): void {
+		this.display(title, { type: 'message', text });
+	}
+
+	private display(title: string, message: Message): void {
+		this.last = { title, message };
 		if (!this.panel) {
 			this.panel = this.createPanel();
 		}
@@ -20,15 +32,15 @@ export class PdfPreview implements vscode.Disposable {
 		if (!this.panel.visible) {
 			this.panel.reveal(undefined, true);
 		}
-		this.post(data);
+		this.post(message);
 	}
 
-	/** Re-opens the panel with the last shown PDF. Returns false when nothing has been merged yet. */
+	/** Re-opens the panel with the last shown PDF. Returns false when nothing has been shown yet. */
 	reveal(): boolean {
 		if (!this.last) {
 			return false;
 		}
-		this.show(this.last.title, this.last.data);
+		this.display(this.last.title, this.last.message);
 		return true;
 	}
 
@@ -36,11 +48,11 @@ export class PdfPreview implements vscode.Disposable {
 		this.panel?.dispose();
 	}
 
-	private post(data: Uint8Array): void {
+	private post(message: Message): void {
 		if (this.ready) {
-			this.panel?.webview.postMessage({ type: 'load', data });
+			this.panel?.webview.postMessage(message);
 		} else {
-			this.pending = data;
+			this.pending = message;
 		}
 	}
 
@@ -58,7 +70,7 @@ export class PdfPreview implements vscode.Disposable {
 			if (msg?.type === 'ready') {
 				this.ready = true;
 				if (this.pending) {
-					panel.webview.postMessage({ type: 'load', data: this.pending });
+					panel.webview.postMessage(this.pending);
 					this.pending = undefined;
 				}
 			}

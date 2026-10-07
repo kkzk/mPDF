@@ -19,6 +19,7 @@ The merged PDF is shown in the built-in **mPDF Preview** panel (powered by [PDF.
 
 winax（ネイティブモジュール）をやめ、PowerShell を非表示の子プロセスとして実行して変換する。VS Code 更新時の再ビルドが不要になった。
 結合した PDF を拡張内蔵のプレビュー（PDF.js）で表示し、他の PDF 拡張が不要に。
+file Order ビューにチェックボックスを追加。文書のチェックで結合への含める／外すを切り替え、シートのチェックで印刷するシートを選ぶ。
 変換・結合のエラーを通知するようにし、VS Code 再起動後にドラッグで並び替えできない不具合などを修正。VS Code 1.90 以降が必要。
 
 ### 0.1.0
