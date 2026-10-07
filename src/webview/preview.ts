@@ -140,9 +140,26 @@ function renderVisible(): void {
 	}
 }
 
+/** Position to restore when pages come back after a message replaced them. */
+let savedPosition = { index: 0, offset: 0 };
+
+async function showText(text: string): Promise<void> {
+	if (pages.length > 0) {
+		savedPosition = anchor();
+	}
+	pages.forEach(clearCanvas);
+	pages = [];
+	await loadingTask?.destroy();
+	loadingTask = undefined;
+	viewer.replaceChildren();
+	pageLabel.textContent = '';
+	message.hidden = false;
+	message.textContent = text;
+}
+
 async function load(data: Uint8Array): Promise<void> {
 	await workerReady;
-	const position = anchor();
+	const position = pages.length > 0 ? anchor() : savedPosition;
 	const task = pdfjs.getDocument({
 		data,
 		cMapUrl: config.cMapUrl,
@@ -208,13 +225,14 @@ window.addEventListener('resize', () => {
 	}, 100);
 });
 
+// Handle messages one at a time so a slow load cannot overwrite a newer message.
+let queue = Promise.resolve();
 window.addEventListener('message', (event: MessageEvent) => {
 	const msg = event.data;
 	if (msg?.type === 'load') {
-		load(msg.data).catch(error => {
-			message.hidden = false;
-			message.textContent = `Failed to display PDF: ${error?.message ?? error}`;
-		});
+		queue = queue.then(() => load(msg.data)).catch(error => showText(`Failed to display PDF: ${error?.message ?? error}`));
+	} else if (msg?.type === 'message') {
+		queue = queue.then(() => showText(msg.text)).catch(console.error);
 	}
 });
 

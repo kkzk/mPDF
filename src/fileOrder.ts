@@ -29,11 +29,14 @@ export class WorkSheet {
 
 export class Document {
 	worksheets: WorkSheet[] = [];
+	/** Whether the document is included in the merged PDF. */
+	enabled = true;
 
 	constructor(public name: string) { }
 
-	static fromJSON(json: { name?: unknown; worksheets?: Partial<WorkSheet>[] }): Document {
+	static fromJSON(json: { name?: unknown; enabled?: boolean; worksheets?: Partial<WorkSheet>[] }): Document {
 		const doc = new Document(String(json.name));
+		doc.enabled = json.enabled ?? true;
 		doc.worksheets = (json.worksheets ?? []).map(WorkSheet.fromJSON);
 		return doc;
 	}
@@ -47,18 +50,51 @@ export function parseSetting(text: string): Document[] {
 	return Array.isArray(json) ? json.map(Document.fromJSON) : [];
 }
 
-/** Moves `source` in front of `target`, or to the end when there is no target. */
+/**
+ * Moves `source` in front of `target`, or to the end when there is no target.
+ * A `source` that is not in the list yet is inserted there.
+ */
 export function moveDocument(documents: Document[], source: Document, target: Document | undefined): void {
 	if (source === target) {
 		return;
 	}
 	const from = documents.indexOf(source);
-	if (from < 0) {
-		return;
+	if (from >= 0) {
+		documents.splice(from, 1);
 	}
-	documents.splice(from, 1);
 	const to = target ? documents.indexOf(target) : -1;
 	documents.splice(to < 0 ? documents.length : to, 0, source);
+}
+
+/** Parses a `text/uri-list` (RFC 2483): one URI per line, `#` lines are comments. */
+export function parseUriList(text: string): vscode.Uri[] {
+	return text
+		.split(/\r?\n/)
+		.map(line => line.trim())
+		.filter(line => line.length > 0 && !line.startsWith('#'))
+		.map(line => vscode.Uri.parse(line));
+}
+
+/**
+ * Shows or hides `sheet` in the PDF of `workbook`.
+ * Returns false (and changes nothing) when that would leave no sheet to print.
+ */
+export function setSheetVisible(workbook: Document, sheet: WorkSheet, visible: boolean): boolean {
+	if (!sheet.printable) {
+		return false;
+	}
+	if (!visible && workbook.worksheets.every(s => s === sheet || !s.visible)) {
+		return false;
+	}
+	sheet.visible = visible;
+	return true;
+}
+
+function checkbox(checked: boolean, tooltip: string): vscode.TreeItem['checkboxState'] {
+	return {
+		state: checked ? vscode.TreeItemCheckboxState.Checked : vscode.TreeItemCheckboxState.Unchecked,
+		tooltip,
+	};
 }
 
 const mimeType = 'application/vnd.code.tree.fileorder';
@@ -70,7 +106,8 @@ export class FileOrderProvider implements vscode.TreeDataProvider<Node>, vscode.
 	private merging?: Promise<void>;
 	private mergeRequested = false;
 
-	readonly dropMimeTypes = [mimeType];
+	// text/uri-list: files dragged from the built-in Explorer or the mPDF File Explorer.
+	readonly dropMimeTypes = [mimeType, 'text/uri-list'];
 	readonly dragMimeTypes = ['text/uri-list'];
 
 	private readonly _onDidChangeTreeData = new vscode.EventEmitter<Node | undefined>();
@@ -103,18 +140,62 @@ export class FileOrderProvider implements vscode.TreeDataProvider<Node>, vscode.
 		if (element instanceof Document) {
 			const treeItem = new vscode.TreeItem(element.name, element.worksheets.length > 0 ? vscode.TreeItemCollapsibleState.Expanded : vscode.TreeItemCollapsibleState.None);
 			treeItem.contextValue = 'file';
+			treeItem.checkboxState = checkbox(element.enabled, 'Include in the merged PDF');
+			const printable = element.worksheets.filter(s => s.printable);
+			if (!element.enabled) {
+				treeItem.description = 'excluded';
+			} else if (printable.length > 0) {
+				treeItem.description = `${printable.filter(s => s.visible).length}/${printable.length} sheets`;
+			}
 			return treeItem;
 		}
 
 		const treeItem = new vscode.TreeItem(element.name);
 		treeItem.contextValue = 'worksheet';
 		if (element.printable) {
-			treeItem.iconPath = new vscode.ThemeIcon(element.visible ? 'check' : 'clear');
+			treeItem.checkboxState = checkbox(element.visible, 'Print this sheet');
+			// Clicking the label toggles as well as clicking the checkbox.
 			treeItem.command = { command: 'fileOrder.select', title: 'select', arguments: [element] };
 		} else {
 			treeItem.iconPath = new vscode.ThemeIcon('circle-slash');
+			treeItem.description = 'hidden';
+			treeItem.tooltip = 'Hidden sheets are not printed';
 		}
 		return treeItem;
+	}
+
+	/** Applies checkbox clicks: documents are included/excluded, sheets are shown/hidden. */
+	async onDidChangeCheckboxState(event: vscode.TreeCheckboxChangeEvent<Node>): Promise<void> {
+		const republish = new Set<Document>();
+		let remerge = false;
+		for (const [node, state] of event.items) {
+			const checked = state === vscode.TreeItemCheckboxState.Checked;
+			if (node instanceof Document) {
+				node.enabled = checked;
+				if (checked) {
+					republish.add(node); // the source may have changed while excluded
+				} else {
+					remerge = true;
+				}
+			} else {
+				const workbook = this.findWorkbook(node);
+				if (workbook && setSheetVisible(workbook, node, checked)) {
+					republish.add(workbook);
+				}
+			}
+		}
+		// Also re-renders checkboxes whose change was refused.
+		this.changed();
+		for (const doc of republish) {
+			if (doc.enabled) {
+				await this.publish(doc);
+			} else {
+				remerge = true;
+			}
+		}
+		if (remerge) {
+			await this.merge();
+		}
 	}
 
 	handleDrag(source: readonly Node[], dataTransfer: vscode.DataTransfer): void {
@@ -123,15 +204,21 @@ export class FileOrderProvider implements vscode.TreeDataProvider<Node>, vscode.
 		}
 	}
 
-	handleDrop(target: Node | undefined, dataTransfer: vscode.DataTransfer): void {
+	async handleDrop(target: Node | undefined, dataTransfer: vscode.DataTransfer): Promise<void> {
+		const targetDocument = target instanceof WorkSheet ? this.findWorkbook(target) : target;
+
 		const source: unknown = dataTransfer.get(mimeType)?.value;
-		if (!(source instanceof Document)) {
+		if (source instanceof Document) {
+			moveDocument(this.documents, source, targetDocument);
+			this.changed();
+			await this.merge();
 			return;
 		}
-		const targetDocument = target instanceof WorkSheet ? this.findWorkbook(target) : target;
-		moveDocument(this.documents, source, targetDocument);
-		this.changed();
-		this.merge();
+
+		const uriList = await dataTransfer.get('text/uri-list')?.asString();
+		if (uriList) {
+			await this.addFiles(parseUriList(uriList), targetDocument);
+		}
 	}
 
 	async publish(item: Document): Promise<void> {
@@ -155,32 +242,72 @@ export class FileOrderProvider implements vscode.TreeDataProvider<Node>, vscode.
 	}
 
 	async add(entry: Entry): Promise<void> {
-		const name = vscode.workspace.asRelativePath(entry.uri, false);
-		const existing = this.documents.find(d => d.name === name);
-		if (existing) {
-			await this.publish(existing);
+		await this.addFiles([entry.uri], undefined);
+	}
+
+	/**
+	 * Adds files in front of `target` (or at the end) and converts them.
+	 * Files already in the list are re-enabled, and moved when a target is given.
+	 */
+	private async addFiles(uris: vscode.Uri[], target: Document | undefined): Promise<void> {
+		const folder = getWorkspaceFolder();
+		if (!folder) {
 			return;
 		}
-
-		const node = new Document(name);
-		if (path.extname(name).toLowerCase() === '.xlsx') {
-			try {
-				const wb = await new exceljs.Workbook().xlsx.readFile(entry.uri.fsPath);
-				node.worksheets = wb.worksheets.map(sheet => new WorkSheet(sheet.name, sheet.state));
-			} catch (error) {
-				vscode.window.showErrorMessage(`mPDF: failed to read ${name}: ${errorMessage(error)}`);
-				return;
+		const added: Document[] = [];
+		const skipped: string[] = [];
+		for (const uri of uris) {
+			if (uri.scheme !== 'file' || vscode.workspace.getWorkspaceFolder(uri)?.uri.toString() !== folder.uri.toString()) {
+				skipped.push(`${path.basename(uri.fsPath)} (outside the workspace folder)`);
+				continue;
 			}
+			const name = vscode.workspace.asRelativePath(uri, false);
+			if (!PdfConverter.isSupported(name)) {
+				skipped.push(`${name} (only .xlsx and .docx are supported)`);
+				continue;
+			}
+			let doc = this.documents.find(d => d.name === name);
+			if (doc) {
+				doc.enabled = true;
+				if (target) {
+					moveDocument(this.documents, doc, target);
+				}
+			} else {
+				try {
+					doc = await this.readDocument(uri, name);
+				} catch (error) {
+					vscode.window.showErrorMessage(`mPDF: failed to read ${name}: ${errorMessage(error)}`);
+					continue;
+				}
+				moveDocument(this.documents, doc, target);
+			}
+			added.push(doc);
 		}
-		this.documents.push(node);
+		if (skipped.length > 0) {
+			vscode.window.showWarningMessage(`mPDF: skipped ${skipped.join(', ')}`);
+		}
+		if (added.length === 0) {
+			return;
+		}
 		this.changed();
-		await this.publish(node);
+		for (const doc of added) {
+			await this.publish(doc);
+		}
+	}
+
+	private async readDocument(uri: vscode.Uri, name: string): Promise<Document> {
+		const doc = new Document(name);
+		if (path.extname(name).toLowerCase() === '.xlsx') {
+			const wb = await new exceljs.Workbook().xlsx.readFile(uri.fsPath);
+			doc.worksheets = wb.worksheets.map(sheet => new WorkSheet(sheet.name, sheet.state));
+		}
+		return doc;
 	}
 
 	async update(uri: vscode.Uri): Promise<void> {
 		const name = vscode.workspace.asRelativePath(uri, false);
 		const document = this.documents.find(d => d.name === name);
-		if (document) {
+		if (document?.enabled) {
 			await this.publish(document);
 		}
 	}
@@ -200,16 +327,13 @@ export class FileOrderProvider implements vscode.TreeDataProvider<Node>, vscode.
 
 	async select(sheet: WorkSheet): Promise<void> {
 		const workbook = this.findWorkbook(sheet);
-		if (!workbook) {
+		if (!workbook || !setSheetVisible(workbook, sheet, !sheet.visible)) {
 			return;
 		}
-		// Keep at least one sheet selected.
-		if (sheet.visible && workbook.worksheets.filter(s => s.visible).length === 1) {
-			return;
-		}
-		sheet.visible = !sheet.visible;
 		this.changed();
-		await this.publish(workbook);
+		if (workbook.enabled) {
+			await this.publish(workbook);
+		}
 	}
 
 	/** Refreshes the tree and persists the order. */
@@ -265,15 +389,21 @@ export class FileOrderProvider implements vscode.TreeDataProvider<Node>, vscode.
 
 	private async mergeOnce(): Promise<void> {
 		const folder = getWorkspaceFolder();
-		if (!folder || this.documents.length === 0) {
+		if (!folder) {
 			return;
 		}
 		const mergedPath = mergedPdfPath(folder);
+		const documents = this.documents.filter(d => d.enabled);
+		if (documents.length === 0) {
+			// Leave the last merged file alone, but do not keep showing stale pages.
+			this.preview.showMessage(path.basename(mergedPath), 'No documents are checked.');
+			return;
+		}
 		const missing: string[] = [];
 		let bytes: Uint8Array;
 		try {
 			const merged = await PDFDocument.create();
-			for (const doc of this.documents) {
+			for (const doc of documents) {
 				let source: Buffer;
 				try {
 					source = await fs.readFile(intermediatePdfPath(folder.uri.fsPath, doc.name));
@@ -312,11 +442,17 @@ function errorMessage(error: unknown): string {
 export class FileOrder {
 	constructor(context: vscode.ExtensionContext) {
 		const treeDataProvider = new FileOrderProvider(context);
-		context.subscriptions.push(vscode.window.createTreeView('fileOrder', {
+		const tree = vscode.window.createTreeView('fileOrder', {
 			treeDataProvider,
 			showCollapseAll: true,
 			canSelectMany: false,
 			dragAndDropController: treeDataProvider,
-		}));
+			// A document's checkbox (include in PDF) and its sheets' checkboxes (print sheet) are independent.
+			manageCheckboxStateManually: true,
+		});
+		context.subscriptions.push(
+			tree,
+			tree.onDidChangeCheckboxState(event => treeDataProvider.onDidChangeCheckboxState(event)),
+		);
 	}
 }
