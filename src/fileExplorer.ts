@@ -22,7 +22,18 @@ function isIntermediate(folder: vscode.WorkspaceFolder, uri: vscode.Uri): boolea
 	return relative === intermediateDir || relative.startsWith(intermediateDir + path.sep);
 }
 
-export class FileTreeProvider implements vscode.TreeDataProvider<Entry> {
+export class FileTreeProvider implements vscode.TreeDataProvider<Entry>, vscode.TreeDragAndDropController<Entry> {
+
+	// Files can be dragged into the file Order view, like from the built-in Explorer.
+	readonly dragMimeTypes = ['text/uri-list'];
+	readonly dropMimeTypes: string[] = [];
+
+	handleDrag(source: readonly Entry[], dataTransfer: vscode.DataTransfer): void {
+		const files = source.filter(entry => entry.type === vscode.FileType.File);
+		if (files.length > 0) {
+			dataTransfer.set('text/uri-list', new vscode.DataTransferItem(files.map(entry => entry.uri.toString()).join('\r\n')));
+		}
+	}
 
 	private readonly _onDidChangeTreeData = new vscode.EventEmitter<Entry | undefined>();
 	readonly onDidChangeTreeData = this._onDidChangeTreeData.event;
@@ -67,7 +78,11 @@ export class FileExplorer {
 
 	constructor(context: vscode.ExtensionContext) {
 		const treeDataProvider = new FileTreeProvider();
-		context.subscriptions.push(vscode.window.createTreeView('fileExplorer', { treeDataProvider }));
+		context.subscriptions.push(vscode.window.createTreeView('fileExplorer', {
+			treeDataProvider,
+			dragAndDropController: treeDataProvider,
+			canSelectMany: true,
+		}));
 
 		const folder = getWorkspaceFolder();
 		if (!folder) {

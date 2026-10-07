@@ -1,7 +1,9 @@
 import * as assert from 'assert';
 import * as path from 'path';
 
-import { Document, WorkSheet, moveDocument, parseSetting, setSheetVisible } from '../fileOrder';
+import * as vscode from 'vscode';
+
+import { Document, WorkSheet, moveDocument, parseSetting, parseUriList, setSheetVisible } from '../fileOrder';
 import { intermediatePdfPath } from '../paths';
 
 suite('paths', () => {
@@ -85,10 +87,33 @@ suite('moveDocument', () => {
 		assert.deepStrictEqual(names(docs), ['b', 'c', 'a']);
 	});
 
+	test('inserts a new document in front of the target', () => {
+		const [a, b, c] = ['a', 'b', 'c'].map(n => new Document(n));
+		const docs = [a, b];
+		moveDocument(docs, c, b);
+		assert.deepStrictEqual(names(docs), ['a', 'c', 'b']);
+	});
+
+	test('appends a new document without a target', () => {
+		const [a, b] = ['a', 'b'].map(n => new Document(n));
+		const docs = [a];
+		moveDocument(docs, b, undefined);
+		assert.deepStrictEqual(names(docs), ['a', 'b']);
+	});
+
 	test('dropping on itself keeps the order', () => {
 		const [a, b] = ['a', 'b'].map(n => new Document(n));
 		const docs = [a, b];
 		moveDocument(docs, b, b);
 		assert.deepStrictEqual(names(docs), ['a', 'b']);
+	});
+});
+
+suite('parseUriList', () => {
+	test('reads one URI per line and skips comments and blank lines', () => {
+		const a = vscode.Uri.file(path.resolve('/ws/a.xlsx'));
+		const b = vscode.Uri.file(path.resolve('/ws/ファイル名・中黒.xlsx'));
+		const uris = parseUriList(`# comment\r\n${a.toString()}\r\n\r\n${b.toString()}\n`);
+		assert.deepStrictEqual(uris.map(u => u.fsPath), [a.fsPath, b.fsPath]);
 	});
 });

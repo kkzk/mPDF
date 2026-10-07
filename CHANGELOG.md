@@ -8,6 +8,7 @@
 - Conversions run one at a time and always close Excel/Word, even on failure.
 - Show the merged PDF in a built-in preview panel (PDF.js); no other PDF extension is needed. It keeps the page position and zoom when the PDF is re-merged.
 - Checkboxes in the file Order view: a document checkbox includes or excludes it from the merged PDF without removing it, and sheet checkboxes replace the check/clear icons. Documents show how many sheets are printed.
+- Drag files from the built-in Explorer or the mPDF File Explorer into the file Order view; they are inserted where dropped. Only .xlsx and .docx files in the workspace folder are added; others are skipped with a warning.
 - Merge with pdf-lib; conversion and merge errors are shown to the user.
 - Fix: documents could not be reordered by drag and drop after reloading VS Code.
 - Fix: dropping on empty space or on a worksheet put the document in the wrong position, and the new order was not saved.
