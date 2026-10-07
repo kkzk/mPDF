@@ -6,3 +6,4 @@ node_modules
 testdata/*.json
 **/*.pdf
 src/testdata/.mPDF.json
+src/testdata/.mPDF/
