@@ -1,77 +1,95 @@
-const winax = require("winax");
-import path = require("path");
+import { execFile } from 'child_process';
+import * as fs from 'fs/promises';
+import * as os from 'os';
+import * as path from 'path';
 
-import * as fo from './fileOrder';
-import * as fs from "fs";
+import { intermediatePdfPath } from './paths';
 
-const xlTypePDF = 0;
-const xlQualityStandard = 0;
-const xlQualityMinimum = 1;
-const xlQuality = xlQualityStandard;
+type JobKind = 'excel' | 'word';
 
-const wdExportFormatPDF = 17;  // PDF
-
-export function saveWord(data: fo.Document[], workspaceDir: string, wordRelpath: string) {
-    const wordPath = path.resolve(path.join(workspaceDir, wordRelpath));
-    var pdfPath = path.join(workspaceDir, ".mPDF", wordRelpath);
-    var basename = path.basename(pdfPath);
-    var name = path.parse(basename).name;
-    pdfPath = path.join(
-        path.dirname(pdfPath),
-        `${name}.pdf`
-    );
-    console.log("convert from ", wordPath);
-    console.log("convert to   ", pdfPath);
-
-    const wordApplication = new winax.Object("Word.Application", { activate: true});
-    const wordDocument = wordApplication.Documents.Open(wordPath, 0, true, true);
-    fs.mkdirSync(path.dirname(pdfPath), { recursive: true });
-    wordDocument.ExportAsFixedFormat(pdfPath, wdExportFormatPDF);
-    wordDocument.Close();
-    wordApplication.Quit();
+interface Job {
+	kind: JobKind;
+	source: string;
+	output: string;
+	sheets: string[];
 }
 
-export function saveExcel(data: fo.Document[], workspaceDir: string, xlsRelpath: string) {
-    const xlsPath = path.resolve(path.join(workspaceDir, xlsRelpath));
-    var pdfPath = path.join(workspaceDir, ".mPDF", xlsRelpath);
-    var basename = path.basename(pdfPath);
-    var name = path.parse(basename).name;
-    pdfPath = path.join(
-        path.dirname(pdfPath),
-        `${name}.pdf`
-    );
-    console.log("convert from ", xlsPath);
-    console.log("convert to   ", pdfPath);
-
-    const excel = new winax.Object("Excel.Application", { activate: true});
-    const workbooks = excel.Workbooks;
-    const workbook = workbooks.Open(xlsPath, 0, true);
-    const doc = data.find((doc) => doc.name === xlsRelpath);
-    const sheets = doc?.worksheets?.filter((sheetname) => sheetname.visible);
-
-    var replace = true;
-    sheets?.forEach((e) => {
-        workbook.sheets[e.name].Select(replace);
-        replace = false;
-    });
-    fs.mkdirSync(path.dirname(pdfPath), { recursive: true });
-    workbook.ActiveSheet.ExportAsFixedFormat(xlTypePDF, pdfPath, xlQuality);
-    workbook.Saved = true;
-    workbook.Close();
-    excel.Quit();
+export interface ConvertTarget {
+	/** Workspace-relative path of the source document. */
+	name: string;
+	/** Sheet names to export (Excel only). */
+	sheets: string[];
 }
 
-export function savePdf(jsonData: fo.Document[], workspaceDir: string, document: string) {
-    const ext = path.extname(document);
-    console.log(`extension: ${ext}`);
-    switch(ext) {
-        case ".xlsx":
-            saveExcel(jsonData, workspaceDir ,document);
-            break;
-        case ".docx":
-            saveWord(jsonData, workspaceDir, document);
-            break;
-        default:
-            break;
-    }
+const timeoutMs = 5 * 60 * 1000;
+
+function kindOf(name: string): JobKind | undefined {
+	switch (path.extname(name).toLowerCase()) {
+		case '.xlsx':
+			return 'excel';
+		case '.docx':
+			return 'word';
+		default:
+			return undefined;
+	}
+}
+
+/**
+ * Converts Office documents to PDF by running `script/saveAsPdf.ps1` in a hidden
+ * PowerShell process. Conversions run one at a time so that rapid successive saves
+ * do not start several Excel/Word instances at once.
+ */
+export class PdfConverter {
+	private queue: Promise<void> = Promise.resolve();
+	private readonly scriptPath: string;
+
+	constructor(extensionPath: string) {
+		this.scriptPath = path.join(extensionPath, 'script', 'saveAsPdf.ps1');
+	}
+
+	static isSupported(name: string): boolean {
+		return kindOf(name) !== undefined;
+	}
+
+	/** Resolves once the conversion finishes; rejects with the script's error message on failure. */
+	convert(workspaceDir: string, target: ConvertTarget): Promise<void> {
+		const kind = kindOf(target.name);
+		if (!kind) {
+			return Promise.resolve();
+		}
+		const job: Job = {
+			kind,
+			source: path.resolve(workspaceDir, target.name),
+			output: intermediatePdfPath(workspaceDir, target.name),
+			sheets: kind === 'excel' ? target.sheets : [],
+		};
+		const result = this.queue.then(() => this.run(job));
+		this.queue = result.catch(() => undefined);
+		return result;
+	}
+
+	private async run(job: Job): Promise<void> {
+		console.log(`convert "${job.source}" -> "${job.output}"`);
+		const dir = await fs.mkdtemp(path.join(os.tmpdir(), 'mpdf-'));
+		const jobPath = path.join(dir, 'job.json');
+		try {
+			await fs.writeFile(jobPath, JSON.stringify(job), 'utf8');
+			await new Promise<void>((resolve, reject) => {
+				execFile(
+					'powershell.exe',
+					['-NoProfile', '-NonInteractive', '-ExecutionPolicy', 'Bypass', '-File', this.scriptPath, jobPath],
+					{ windowsHide: true, timeout: timeoutMs, encoding: 'utf8' },
+					(error, _stdout, stderr) => {
+						if (error) {
+							reject(new Error(stderr.trim() || error.message));
+						} else {
+							resolve();
+						}
+					},
+				);
+			});
+		} finally {
+			await fs.rm(dir, { recursive: true, force: true });
+		}
+	}
 }

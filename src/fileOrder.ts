@@ -1,228 +1,322 @@
 import * as vscode from 'vscode';
+import * as fs from 'fs/promises';
 import * as path from 'path';
 import * as exceljs from 'exceljs';
-import * as fs from "fs";
+import { PDFDocument } from 'pdf-lib';
 
-import replaceExt = require('replace-ext');
-import PDFMerger = require('pdf-merger-js');
+import { Entry } from './fileExplorer';
+import { PdfConverter } from './saveAsPdf';
+import { getWorkspaceFolder, intermediatePdfPath, mergedPdfPath, settingFile } from './paths';
+import { PdfPreview } from './preview';
 
-import { Entry } from "./fileExplorer";
+export class WorkSheet {
+	visible: boolean;
+	printable: boolean;
 
-import * as sap from './saveAsPdf';
+	constructor(public name: string, state: string) {
+		// hidden or veryHidden sheets are not printable
+		this.visible = state === 'visible';
+		this.printable = state === 'visible';
+	}
 
-type NodeType = "worksheet" | "workbook" | "misc";
-
-export interface Node {
-    name: string;
-    worksheets?: WorkSheet[];
+	static fromJSON(json: Partial<WorkSheet>): WorkSheet {
+		const sheet = new WorkSheet(String(json.name), 'visible');
+		sheet.visible = json.visible ?? true;
+		sheet.printable = json.printable ?? true;
+		return sheet;
+	}
 }
 
-export class WorkSheet implements Node {
-    name: string;
-    visible: boolean = true;
-    printable: boolean = true;
+export class Document {
+	worksheets: WorkSheet[] = [];
 
-    constructor(name: string, state: string){
-        this.name = name;
-        this.visible = true ? state === "visible": false;
-        this.printable = true ? state === "visible": false;  // hidden or veryHidden is not printable
-    }
+	constructor(public name: string) { }
+
+	static fromJSON(json: { name?: unknown; worksheets?: Partial<WorkSheet>[] }): Document {
+		const doc = new Document(String(json.name));
+		doc.worksheets = (json.worksheets ?? []).map(WorkSheet.fromJSON);
+		return doc;
+	}
 }
 
-export class Document implements Node {
-    name: string;
-    worksheets?: WorkSheet[];
+export type Node = Document | WorkSheet;
 
-    constructor (name: string) {
-        this.name = name;
-        this.worksheets = [];
-    }
+/** Restores the contents of `.mPDF.json`. */
+export function parseSetting(text: string): Document[] {
+	const json: unknown = JSON.parse(text);
+	return Array.isArray(json) ? json.map(Document.fromJSON) : [];
 }
 
-export class FileOrderProvidor implements vscode.TreeDataProvider<Node>, vscode.TreeDragAndDropController<Node> {
-    private documents: Document[] = [];
-    private terminal?: vscode.Terminal;
+/** Moves `source` in front of `target`, or to the end when there is no target. */
+export function moveDocument(documents: Document[], source: Document, target: Document | undefined): void {
+	if (source === target) {
+		return;
+	}
+	const from = documents.indexOf(source);
+	if (from < 0) {
+		return;
+	}
+	documents.splice(from, 1);
+	const to = target ? documents.indexOf(target) : -1;
+	documents.splice(to < 0 ? documents.length : to, 0, source);
+}
 
-    constructor(context: vscode.ExtensionContext) {
-        this.loadSetting();
-        context.subscriptions.push(vscode.commands.registerCommand("fileOrder.add", (name) => this.add(name)));
-        context.subscriptions.push(vscode.commands.registerCommand("fileOrder.update", (entry) => this.update(entry)));
-        context.subscriptions.push(vscode.commands.registerCommand("fileOrder.delete", (name) => this.delete(name)));
-        context.subscriptions.push(vscode.commands.registerCommand("fileOrder.select", (element) => this.select(element)));
-        context.subscriptions.push(vscode.commands.registerCommand("fileOrder.merge", () => this.merge()));
-        context.subscriptions.push(vscode.commands.registerCommand('fileOrder.publish', (item: Node) => this.publish(item)));
-    }
+const mimeType = 'application/vnd.code.tree.fileorder';
 
-	dropMimeTypes = ['application/vnd.code.tree.fileOrderProvidor'];
-	dragMimeTypes = ['text/uri-list'];
+export class FileOrderProvider implements vscode.TreeDataProvider<Node>, vscode.TreeDragAndDropController<Node> {
+	private documents: Document[] = [];
+	private readonly converter: PdfConverter;
+	private readonly preview: PdfPreview;
+	private merging?: Promise<void>;
+	private mergeRequested = false;
 
-    private _onDidChangeTreeData: vscode.EventEmitter<Node | undefined> = new vscode.EventEmitter<Node | undefined>();
+	readonly dropMimeTypes = [mimeType];
+	readonly dragMimeTypes = ['text/uri-list'];
 
-    readonly onDidChangeTreeData: vscode.Event<Node | undefined> = this._onDidChangeTreeData.event;
+	private readonly _onDidChangeTreeData = new vscode.EventEmitter<Node | undefined>();
+	readonly onDidChangeTreeData = this._onDidChangeTreeData.event;
 
-    getChildren(element?: Node): vscode.ProviderResult<Node[]> {
-        if(element?.worksheets) {
-            return element.worksheets;
-        }
-        return this.documents;
-    }
+	constructor(context: vscode.ExtensionContext) {
+		this.converter = new PdfConverter(context.extensionPath);
+		this.preview = new PdfPreview(context.extensionUri);
+		context.subscriptions.push(
+			this.preview,
+			vscode.commands.registerCommand('fileOrder.preview', () => this.showPreview()),
+			vscode.commands.registerCommand('fileOrder.add', (entry: Entry) => this.add(entry)),
+			vscode.commands.registerCommand('fileOrder.update', (uri: vscode.Uri) => this.update(uri)),
+			vscode.commands.registerCommand('fileOrder.delete', (item: Document) => this.delete(item)),
+			vscode.commands.registerCommand('fileOrder.select', (sheet: WorkSheet) => this.select(sheet)),
+			vscode.commands.registerCommand('fileOrder.merge', () => this.merge()),
+			vscode.commands.registerCommand('fileOrder.publish', (item: Document) => this.publish(item)),
+		);
+		this.loadSetting();
+	}
 
-    getTreeItem(element: Node): vscode.TreeItem | Thenable<vscode.TreeItem> {
-        if (element.worksheets) {
-            // Top node allways has worksheets property even thou that is not excel.
-            var treeItem = new vscode.TreeItem(element.name, vscode.TreeItemCollapsibleState.Expanded);
-            treeItem.contextValue = "file";
-        }
-        else {
-            var treeItem = new vscode.TreeItem(element.name);
-            treeItem.contextValue = "worksheet";
-            if ((element as WorkSheet).printable) {
-                treeItem.iconPath = (element as WorkSheet).visible ? new vscode.ThemeIcon("check"): new vscode.ThemeIcon("clear");
-                treeItem.command = { command: 'fileOrder.select', title: "select", arguments: [element] };
-            }
-            else {
-                treeItem.iconPath = new vscode.ThemeIcon("circle-slash");
-            }
+	getChildren(element?: Node): Node[] {
+		if (element instanceof Document) {
+			return element.worksheets;
+		}
+		return element ? [] : this.documents;
+	}
 
-        }
-        return treeItem;
-    }
+	getTreeItem(element: Node): vscode.TreeItem {
+		if (element instanceof Document) {
+			const treeItem = new vscode.TreeItem(element.name, element.worksheets.length > 0 ? vscode.TreeItemCollapsibleState.Expanded : vscode.TreeItemCollapsibleState.None);
+			treeItem.contextValue = 'file';
+			return treeItem;
+		}
 
-    public async handleDrop(target: Node | undefined, sources: vscode.DataTransfer, token: vscode.CancellationToken): Promise<void> {
-		const transferItem = sources.get('application/vnd.code.tree.fileOrderProvidor');
-		if (!transferItem) {
+		const treeItem = new vscode.TreeItem(element.name);
+		treeItem.contextValue = 'worksheet';
+		if (element.printable) {
+			treeItem.iconPath = new vscode.ThemeIcon(element.visible ? 'check' : 'clear');
+			treeItem.command = { command: 'fileOrder.select', title: 'select', arguments: [element] };
+		} else {
+			treeItem.iconPath = new vscode.ThemeIcon('circle-slash');
+		}
+		return treeItem;
+	}
+
+	handleDrag(source: readonly Node[], dataTransfer: vscode.DataTransfer): void {
+		if (source[0] instanceof Document) {
+			dataTransfer.set(mimeType, new vscode.DataTransferItem(source[0]));
+		}
+	}
+
+	handleDrop(target: Node | undefined, dataTransfer: vscode.DataTransfer): void {
+		const source: unknown = dataTransfer.get(mimeType)?.value;
+		if (!(source instanceof Document)) {
 			return;
 		}
-        const treeItems: Node[] = transferItem.value;
-        console.log(target);
-        console.log(treeItems[0].name);
-        this.documents.splice(this.documents.indexOf(treeItems[0]), 1);
-        this.documents.splice(this.documents.indexOf(target as Node), 0, treeItems[0]);
-        this._onDidChangeTreeData.fire(undefined);
-        vscode.commands.executeCommand("fileOrder.merge");
-    }
+		const targetDocument = target instanceof WorkSheet ? this.findWorkbook(target) : target;
+		moveDocument(this.documents, source, targetDocument);
+		this.changed();
+		this.merge();
+	}
 
-    public async handleDrag(source: Node[], treeDataTransfer: vscode.DataTransfer, token: vscode.CancellationToken): Promise<void> {
-        if (source[0] instanceof Document) {
-            // console.log(source);
-            treeDataTransfer.set('application/vnd.code.tree.fileOrderProvidor', new vscode.DataTransferItem(source));
-        }
-    }
+	async publish(item: Document): Promise<void> {
+		const folder = getWorkspaceFolder();
+		if (!folder) {
+			return;
+		}
+		if (PdfConverter.isSupported(item.name)) {
+			const sheets = item.worksheets.filter(s => s.visible).map(s => s.name);
+			try {
+				await vscode.window.withProgress(
+					{ location: vscode.ProgressLocation.Window, title: `mPDF: converting ${item.name}` },
+					() => this.converter.convert(folder.uri.fsPath, { name: item.name, sheets }),
+				);
+			} catch (error) {
+				vscode.window.showErrorMessage(`mPDF: failed to convert ${item.name}: ${errorMessage(error)}`);
+				return;
+			}
+		}
+		await this.merge();
+	}
 
-    publish(item: Node) {
-        if (vscode.workspace.workspaceFolders !== undefined){
-            const workspaceDir = vscode.workspace.workspaceFolders[0].uri.fsPath;
-            sap.savePdf(this.documents, workspaceDir, item.name);
-        }
-    }
-    
-    add(entry: Entry): void {
-        var node = new Document(vscode.workspace.asRelativePath(entry.uri, false));
-        if (entry.uri.fsPath.endsWith("xlsx")) {
-            var wb = new exceljs.Workbook();
-            wb.xlsx.readFile(entry.uri.fsPath).then(wb => {
-                node.worksheets = wb.worksheets.map((sheet) => new WorkSheet(sheet.name, sheet.state));
-                this.documents.push(node);
-                this.saveSetting();
-                this._onDidChangeTreeData.fire(undefined);
-                vscode.commands.executeCommand("fileOrder.publish", node);
-            });
-        }
-        else {
-            this.documents.push(node);
-            this.saveSetting();
-            this._onDidChangeTreeData.fire(undefined);
-            vscode.commands.executeCommand("fileOrder.publish", node);
-        }
-    }
+	async add(entry: Entry): Promise<void> {
+		const name = vscode.workspace.asRelativePath(entry.uri, false);
+		const existing = this.documents.find(d => d.name === name);
+		if (existing) {
+			await this.publish(existing);
+			return;
+		}
 
-    update(entry: Entry): void {
-        const relativePath = vscode.workspace.asRelativePath(entry.uri, false);
-        const documents = this.documents.filter(d => d.name === relativePath);
-        if (documents.length === 1) {
-            vscode.commands.executeCommand("fileOrder.publish", documents[0]);
-        }
-    }
+		const node = new Document(name);
+		if (path.extname(name).toLowerCase() === '.xlsx') {
+			try {
+				const wb = await new exceljs.Workbook().xlsx.readFile(entry.uri.fsPath);
+				node.worksheets = wb.worksheets.map(sheet => new WorkSheet(sheet.name, sheet.state));
+			} catch (error) {
+				vscode.window.showErrorMessage(`mPDF: failed to read ${name}: ${errorMessage(error)}`);
+				return;
+			}
+		}
+		this.documents.push(node);
+		this.changed();
+		await this.publish(node);
+	}
 
-    delete(item: Node) {
-        const index = this.documents.indexOf(item, 0);
-        if (index > -1) {
-            this.documents.splice(index, 1);
-        }
-        this._onDidChangeTreeData.fire(undefined);
-        this.saveSetting();
-        vscode.commands.executeCommand("fileOrder.merge");
-    }
+	async update(uri: vscode.Uri): Promise<void> {
+		const name = vscode.workspace.asRelativePath(uri, false);
+		const document = this.documents.find(d => d.name === name);
+		if (document) {
+			await this.publish(document);
+		}
+	}
 
-    private findWorkbook(worksheet: WorkSheet): Document | undefined {
-        for (let workbook of this.documents){
-            if (workbook.worksheets?.filter(s => s === worksheet).length !== 0) {
-                return workbook;
-            }
-        }
-        return undefined;
-    }
+	async delete(item: Document): Promise<void> {
+		const index = this.documents.indexOf(item);
+		if (index > -1) {
+			this.documents.splice(index, 1);
+		}
+		this.changed();
+		await this.merge();
+	}
 
-    select(element: Node){
-        // # console.log(element);
-        const workbook = this.findWorkbook((element as WorkSheet));
-        (element as WorkSheet).visible = !(element as WorkSheet).visible;
-        if (workbook?.worksheets?.filter(s => s.visible).length !== 0) {
-            this._onDidChangeTreeData.fire(undefined);
-            this.saveSetting();
-            vscode.commands.executeCommand("fileOrder.publish", workbook);
-        }
-        else {
-            (element as WorkSheet).visible = !(element as WorkSheet).visible;
-        }
-    }
+	private findWorkbook(worksheet: WorkSheet): Document | undefined {
+		return this.documents.find(d => d.worksheets.includes(worksheet));
+	}
 
-    saveSetting(){
-        var data = JSON.stringify(this.documents, null, 2);
-		const workspaceFolder = vscode.workspace.workspaceFolders?.filter(folder => folder.uri.scheme === 'file')[0];
-        if (workspaceFolder) {
-            fs.writeFileSync(path.join(workspaceFolder.uri.fsPath, "./.mPDF.json"), data);
-        }
-    }
+	async select(sheet: WorkSheet): Promise<void> {
+		const workbook = this.findWorkbook(sheet);
+		if (!workbook) {
+			return;
+		}
+		// Keep at least one sheet selected.
+		if (sheet.visible && workbook.worksheets.filter(s => s.visible).length === 1) {
+			return;
+		}
+		sheet.visible = !sheet.visible;
+		this.changed();
+		await this.publish(workbook);
+	}
 
-    loadSetting(){
-		const workspaceFolder = vscode.workspace.workspaceFolders?.filter(folder => folder.uri.scheme === 'file')[0];
-        if (workspaceFolder) {
-            try {
-                this.documents = JSON.parse((fs.readFileSync(path.join(workspaceFolder.uri.fsPath, "./.mPDF.json")).toString()));                
-            } catch (error) {
-                // pass                
-            }
-        }
-    }
+	/** Refreshes the tree and persists the order. */
+	private changed(): void {
+		this._onDidChangeTreeData.fire(undefined);
+		this.saveSetting().catch(error => {
+			vscode.window.showErrorMessage(`mPDF: failed to save ${settingFile}: ${errorMessage(error)}`);
+		});
+	}
 
-    private merge() {
-        const merger = new PDFMerger();
-		const workspaceFolder = vscode.workspace.workspaceFolders?.filter(folder => folder.uri.scheme === 'file')[0];
-        if (workspaceFolder) {
-            const sources = this.documents.map((wb) => {
-                return replaceExt(path.join(workspaceFolder.uri.fsPath, ".mPDF", wb.name), ".pdf");
-            });
-            const mergedPath = path.join(workspaceFolder.uri.fsPath, workspaceFolder.name + ".pdf");
-            console.log("merge sources:", sources);
-            (async (sources: string[], mergedPath: string) => {
-                sources.forEach(element => {
-                    merger.add(element);
-                });
-                await merger.save(mergedPath);
-                // vscode.window.showTextDocument(vscode.Uri.file(mergedPath));
-                vscode.commands.executeCommand("vscode.open", vscode.Uri.file(mergedPath));
-            })(sources, mergedPath).catch(() => {
-                console.log("error");
-            });
-        }
-    }
+	private async saveSetting(): Promise<void> {
+		const folder = getWorkspaceFolder();
+		if (folder) {
+			await fs.writeFile(path.join(folder.uri.fsPath, settingFile), JSON.stringify(this.documents, null, 2));
+		}
+	}
+
+	private async loadSetting(): Promise<void> {
+		const folder = getWorkspaceFolder();
+		if (!folder) {
+			return;
+		}
+		let text: string;
+		try {
+			text = await fs.readFile(path.join(folder.uri.fsPath, settingFile), 'utf8');
+		} catch {
+			return; // not created yet
+		}
+		try {
+			this.documents = parseSetting(text);
+			this._onDidChangeTreeData.fire(undefined);
+		} catch (error) {
+			vscode.window.showWarningMessage(`mPDF: ignored broken ${settingFile}: ${errorMessage(error)}`);
+		}
+	}
+
+	/** Merges the intermediate PDFs. Requests during a running merge are coalesced into one more run. */
+	merge(): Promise<void> {
+		if (this.merging) {
+			this.mergeRequested = true;
+			return this.merging;
+		}
+		this.merging = (async () => {
+			do {
+				this.mergeRequested = false;
+				await this.mergeOnce();
+			} while (this.mergeRequested);
+		})().finally(() => {
+			this.merging = undefined;
+		});
+		return this.merging;
+	}
+
+	private async mergeOnce(): Promise<void> {
+		const folder = getWorkspaceFolder();
+		if (!folder || this.documents.length === 0) {
+			return;
+		}
+		const mergedPath = mergedPdfPath(folder);
+		const missing: string[] = [];
+		let bytes: Uint8Array;
+		try {
+			const merged = await PDFDocument.create();
+			for (const doc of this.documents) {
+				let source: Buffer;
+				try {
+					source = await fs.readFile(intermediatePdfPath(folder.uri.fsPath, doc.name));
+				} catch {
+					missing.push(doc.name);
+					continue;
+				}
+				const pdf = await PDFDocument.load(source);
+				const pages = await merged.copyPages(pdf, pdf.getPageIndices());
+				pages.forEach(page => merged.addPage(page));
+			}
+			bytes = await merged.save();
+			await fs.writeFile(mergedPath, bytes);
+		} catch (error) {
+			vscode.window.showErrorMessage(`mPDF: failed to merge into ${path.basename(mergedPath)}: ${errorMessage(error)}`);
+			return;
+		}
+		if (missing.length > 0) {
+			vscode.window.showWarningMessage(`mPDF: skipped documents without PDF: ${missing.join(', ')}`);
+		}
+		this.preview.show(path.basename(mergedPath), bytes);
+	}
+
+	/** Opens the preview; merges first if nothing has been shown in this session. */
+	private async showPreview(): Promise<void> {
+		if (!this.preview.reveal()) {
+			await this.merge();
+		}
+	}
+}
+
+function errorMessage(error: unknown): string {
+	return error instanceof Error ? error.message : String(error);
 }
 
 export class FileOrder {
-    constructor(context: vscode.ExtensionContext) {
-        const treeDataProvider = new FileOrderProvidor(context);
-        const tree = vscode.window.createTreeView('fileOrder', { treeDataProvider: treeDataProvider, showCollapseAll: true, canSelectMany: false, dragAndDropController: treeDataProvider });
-        context.subscriptions.push(tree);
-    }
+	constructor(context: vscode.ExtensionContext) {
+		const treeDataProvider = new FileOrderProvider(context);
+		context.subscriptions.push(vscode.window.createTreeView('fileOrder', {
+			treeDataProvider,
+			showCollapseAll: true,
+			canSelectMany: false,
+			dragAndDropController: treeDataProvider,
+		}));
+	}
 }
