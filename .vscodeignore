@@ -12,3 +12,4 @@ eslint.config.mjs
 **/tsconfig*.json
 **/*.map
 **/*.ts
+.github/**
